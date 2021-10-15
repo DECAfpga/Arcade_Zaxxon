@@ -120,12 +120,14 @@ port(
  video_r        : out std_logic_vector(2 downto 0);
  video_g        : out std_logic_vector(2 downto 0);
  video_b        : out std_logic_vector(1 downto 0);
- video_clk      : out std_logic;
  video_csync    : out std_logic;
  video_blankn   : out std_logic;
  video_hs       : out std_logic;
  video_vs       : out std_logic;
- 
+
+ video_clk      : out std_logic;     --added by somhic
+ video_pix      : out std_logic;     --added by somhic
+
  audio_out_l    : out std_logic_vector(15 downto 0);
  audio_out_r    : out std_logic_vector(15 downto 0);
   
@@ -149,8 +151,6 @@ port(
  cocktail       : in std_logic;
  service        : in std_logic;
  flip_screen    : in std_logic;
-
-
   
  dbg_cpu_addr : out std_logic_vector(15 downto 0)
  );
@@ -336,7 +336,8 @@ end process;
 pix_ena <= '1' when clock_cnt(1 downto 0) = "01"    else '0'; -- (6MHz)
 cpu_ena <= '1' when hcnt(0) = '0' and pix_ena = '1' else '0'; -- (3MHz)
 
-video_clk <= clock_cnt(0);    -- added by somhic
+video_clk <= clock_cnt(0);    -- (12 MHz)  added by somhic
+video_pix <= clock_cnt(1);    -- ( 6 MHz)  tested with pix_ena and clock_cnt(1) with no improvement
 
 ---------------------------------------
 -- Video scanner  384x264 @6.083 MHz --
@@ -345,6 +346,7 @@ video_clk <= clock_cnt(0);    -- added by somhic
 -- line  : 63.13us -> 15.84kHz       --
 -- frame : 16.67ms -> 60.00Hz        --
 ---------------------------------------
+video_hs <= hsync0;    -- added by somhic
 
 process (reset, clock_vid)
 begin
@@ -373,6 +375,8 @@ begin
 				-- set syncs position 
 				if hcnt = 170 then              -- tune screen H position here
 					hs_cnt <= (others => '0');
+					if vcnt = 0 then video_vs <= '0'; end if;	-- added by somhic
+					if vcnt = 3 then video_vs <= '1'; end if;     -- added by somhic
 					if (vcnt = 248) then         -- tune screen V position here
 						vs_cnt <= (others => '0');
 					else
@@ -435,12 +439,10 @@ begin
 	
 				-- added by somhic
 				-- external sync outputs
-
-				video_hs <= hsync0;
-				
-				if    vs_cnt = 0 then video_vs <= '0';
-				elsif vs_cnt = 11 then video_vs <= '1';
-				end if;
+				--video_hs <= hsync0;
+				--if    vs_cnt = 0 then video_vs <= '0';
+				--	elsif vs_cnt = 11 then video_vs <= '1';
+				--end if;
 	
 			end if;
 		end if;

@@ -4,6 +4,9 @@
 -- v1 initial revision
 -- v2 added video_vs & video_hs in zaxxon.vhd
 -- v3 hdmi working. Added video_clk output in zaxxon.vhd
+-- v3.1 revised qsf. added joystick. added RGB/VGA.  VGA & RGB output now working
+--
+-- THIS VERSION STILL MISSING AUDIO
 --
 ---------------------------------------------------------------------------------
 -- DE10_lite Top level for Zaxxon by Dar (darfpga@aol.fr) (23/11/2019)
@@ -73,14 +76,26 @@ port(
  --ledr           : out std_logic_vector(9 downto 0);
  key            : in std_logic_vector(1 downto 0);
 
---  vga_r     : out std_logic_vector(2 downto 0);
---  vga_g     : out std_logic_vector(2 downto 0);
---  vga_b     : out std_logic_vector(2 downto 0);
---  vga_hs    : out std_logic;
---  vga_vs    : out std_logic;
+ vga_r     : out std_logic_vector(3 downto 0);
+ vga_g     : out std_logic_vector(3 downto 0);
+ vga_b     : out std_logic_vector(3 downto 0);
+ vga_hs    : out std_logic;
+ vga_vs    : out std_logic;
  
  ps2clk   : in std_logic;
  ps2dat   : in std_logic;
+
+--  audio_pwm_l  : out std_logic;
+--  audio_pwm_r  : out std_logic;
+
+  -- JOYSTICK
+  JOY1_B2_P9		: IN    STD_LOGIC;
+  JOY1_B1_P6		: IN    STD_LOGIC;
+  JOY1_UP		    : IN    STD_LOGIC;
+  JOY1_DOWN		  : IN    STD_LOGIC;
+  JOY1_LEFT	  	: IN    STD_LOGIC;
+  JOY1_RIGHT		: IN    STD_LOGIC;
+  JOYX_SEL_O		: OUT   STD_LOGIC := '1';
 
 -- HDMI-TX  DECA 
 	HDMI_I2C_SCL  : inout std_logic; 		          		
@@ -96,20 +111,9 @@ port(
 	HDMI_TX_INT   : in  std_logic;		          		
 	HDMI_TX_VS    : out std_logic         
 
--- AUDIO CODEC  DECA 
---   AUDIO_GPIO_MFP5 : inout std_logic;
---   AUDIO_MISO_MFP4 : in std_logic;
---   AUDIO_RESET_n :  inout std_logic;
---   AUDIO_SCLK_MFP3 : out std_logic;
---   AUDIO_SCL_SS_n : out std_logic;
---   AUDIO_SDA_MOSI : inout std_logic;
---   AUDIO_SPI_SELECT : out std_logic;
---   i2sMck : out std_logic;
---   i2sSck : out std_logic;
---   i2sLr : out std_logic;
---   i2sD : out std_logic
 );
 end zaxxon_deca;
+
 
 architecture struct of zaxxon_deca is
 
@@ -126,6 +130,7 @@ architecture struct of zaxxon_deca is
  signal vsync     : std_logic;
  signal csync     : std_logic;
  signal blankn    : std_logic;
+ signal tv15Khz_mode : std_logic := '0';
 
  signal audio_l           : std_logic_vector(15 downto 0);
  signal audio_r           : std_logic_vector(15 downto 0);
@@ -135,8 +140,8 @@ architecture struct of zaxxon_deca is
  alias reset_n         : std_logic is key(0);
  alias ps2_clk         : std_logic is ps2clk; 
  alias ps2_dat         : std_logic is ps2dat; 
---  alias pwm_audio_out_l : std_logic is gpio(1);  --gpio(2);
---  alias pwm_audio_out_r : std_logic is gpio(3);  --gpio(3);
+--  alias pwm_audio_out_l : std_logic is audio_pwm_l;  
+--  alias pwm_audio_out_r : std_logic is audio_pwm_r;  
  
  signal kbd_intr       : std_logic;
  signal kbd_scancode   : std_logic_vector(7 downto 0);
@@ -146,46 +151,59 @@ architecture struct of zaxxon_deca is
 
 signal dbg_cpu_addr : std_logic_vector(15 downto 0);
 
+
 -- video signals   -- mod by somhic
- signal clock_vga       : std_logic;   
- signal video_clk       : std_logic;   
+-- signal clock_vga       : std_logic;   
+-- signal clock_vga2       : std_logic;   
+ signal video_clk       : std_logic; 
+ signal video_pix       : std_logic; 
  signal vga_g_i         : std_logic_vector(5 downto 0);   
  signal vga_r_i         : std_logic_vector(5 downto 0);   
  signal vga_b_i         : std_logic_vector(5 downto 0);   
---  signal vga_r_o         : std_logic_vector(5 downto 0);   
---  signal vga_g_o         : std_logic_vector(5 downto 0);   
---  signal vga_b_o         : std_logic_vector(5 downto 0);   
+ signal vga_r_o         : std_logic_vector(5 downto 0);   
+ signal vga_g_o         : std_logic_vector(5 downto 0);   
+ signal vga_b_o         : std_logic_vector(5 downto 0);   
+ signal vga_hs_o        : std_logic;
+ signal vga_vs_o        : std_logic;
 
--- signals for I2S output    -- mod by somhic
---  signal I2S_SCLK         : std_logic;   
---  signal I2S_LRCLK        : std_logic;   
---  signal sample_data      : std_logic_vector(31 downto 0); -- audio data : 16bits left channel + 16bits right channel    
---  signal tx_data          : std_logic;   
---  signal sample_data_reg  : std_logic_vector(31 downto 0);
---  signal audio_out        : std_logic := '0';
---  signal audio_bit_cnt    : integer range 0 to 31 := 0;
+ signal vga_r_c         : std_logic_vector(3 downto 0);
+ signal vga_g_c         : std_logic_vector(3 downto 0);
+ signal vga_b_c         : std_logic_vector(3 downto 0);
+ signal vga_hs_c        : std_logic;
+ signal vga_vs_c        : std_logic;
 
--- component vga_scandoubler is          -- mod by somhic
---    port (
---         clkvideo               : in std_logic;
---         clkvga                 : in std_logic;      -- has to be double of clkvideo
---         enable_scandoubling    : in std_logic;
---         disable_scaneffect     : in std_logic;       
---         ri                : in std_logic_vector( 5 downto 0);
---         gi                : in std_logic_vector( 5 downto 0);
---         bi                : in std_logic_vector( 5 downto 0);
---         hsync_ext_n       : in std_logic;
---         vsync_ext_n       : in std_logic;
---         csync_ext_n       : in std_logic; 
---         ro                : out std_logic_vector( 5 downto 0);
---         go                : out std_logic_vector( 5 downto 0);
---         bo                : out std_logic_vector( 5 downto 0); 
---         hsync             : out std_logic;
---         vsync             : out std_logic
---    );
---    end component;
+--  signal ce_x1       : std_logic; 
+--  signal i_div       : std_logic_vector(1 downto 0);   
+--  signal last_hs_in  : std_logic; 
 
-component I2C_HDMI_Config
+ signal left_i          : std_logic; 
+ signal right_i         : std_logic; 
+ signal up_i            : std_logic;
+ signal down_i          : std_logic;
+ signal fire_i          : std_logic;
+ 
+
+component scandoubler        -- mod by somhic
+    port (
+    clk_sys : in std_logic;
+    scanlines : in std_logic_vector (1 downto 0);
+    ce_x1 : in std_logic;
+    ce_x2 : in std_logic;
+    hs_in : in std_logic;
+    vs_in : in std_logic;
+    r_in : in std_logic_vector (5 downto 0);
+    g_in : in std_logic_vector (5 downto 0);
+    b_in : in std_logic_vector (5 downto 0);
+    hs_out : out std_logic;
+    vs_out : out std_logic;
+    r_out : out std_logic_vector (5 downto 0);
+    g_out : out std_logic_vector (5 downto 0);
+    b_out : out std_logic_vector (5 downto 0)
+  );
+end component;
+
+
+component I2C_HDMI_Config       -- mod by somhic
     port (
     iCLK : in std_logic;
     iRST_N : in std_logic;
@@ -194,19 +212,6 @@ component I2C_HDMI_Config
     HDMI_TX_INT : in std_logic
   );
 end component;
-
--- component AUDIO_SPI_CTL_RD
---     port (
---     iRESET_n : in std_logic;
---     iCLK_50 : in std_logic;
---     oCS_n : out std_logic;
---     oSCLK : out std_logic;
---     oDIN : out std_logic;
---     iDOUT : in std_logic
---   );
--- end component;
-
-signal RESET_DELAY_n     : std_logic;   
 
 begin
 
@@ -226,16 +231,18 @@ port map(
  clock_24   => clock_24,
  reset      => reset,
  
+ -- tv15Khz_mode => tv15Khz_mode,
  video_r      => r,
  video_g      => g,
  video_b      => b,
- video_clk    => video_clk,
-
  video_csync  => csync,
  video_blankn => blankn,
  video_hs     => hsync,
  video_vs     => vsync,
- 
+
+ video_clk    => video_clk,    -- mod by somhic
+ video_pix    => video_pix,    -- mod by somhic
+
  audio_out_l    => audio_l,
  audio_out_r    => audio_r,
    
@@ -244,11 +251,11 @@ port map(
  start1         => fn_pulse(1), -- F2
  start2         => fn_pulse(2), -- F3
  
- left           => joy_BBBBFRLDU(2), -- left
- right          => joy_BBBBFRLDU(3), -- right
- up             => joy_BBBBFRLDU(0), -- up
- down           => joy_BBBBFRLDU(1), -- down
- fire           => joy_BBBBFRLDU(4), -- space
+ left           => not left_i,  -- left
+ right          => not right_i, -- right
+ up             => not up_i,    -- up
+ down           => not down_i,  -- down
+ fire           => not fire_i,  -- space
  
  left_c         => joy_BBBBFRLDU(2), -- left
  right_c        => joy_BBBBFRLDU(3), -- right
@@ -263,53 +270,99 @@ port map(
  dbg_cpu_addr => dbg_cpu_addr
 );
 
--- vga scandoubler
--- scandoubler : vga_scandoubler
--- port map(
---   --input
---   clkvideo  => clock_24,
---   clkvga    => clock_24,      -- has to be double of clkvideo
---   enable_scandoubling => '1',
---   disable_scaneffect  => '1',  -- 1 to disable scanlines
---   ri  => vga_r_i,
---   gi  => vga_g_i,
---   bi  => vga_b_i,
---   hsync_ext_n => hsync,
---   vsync_ext_n => vsync,
---   csync_ext_n => csync,
---   --output
---   ro  => vga_r_o,
---   go  => vga_g_o,
---   bo  => vga_b_o,
---   hsync => vga_hs,
---   vsync => vga_vs
--- );
+-- VGA 
+-- adapt video to 6bits/color only and blank
+vga_r_i <= r & r     when blankn = '1' else "000000";
+vga_g_i <= g & g     when blankn = '1' else "000000";
+vga_b_i <= b & b & b when blankn = '1' else "000000";
 
+-- process (clock_24)
+-- begin
+-- 		if rising_edge(clock_24) then
+--       last_hs_in <= hsync;
+-- 			if (last_hs_in = '1' and HSync = '0') then
+-- 		    i_div <= "00";
+-- 			else
+--         i_div <= i_div + '1';
+-- 			end if;
+-- 		end if;
+-- end process;
+-- ce_x1 <= i_div(0);    --12 MHz
+
+--clk_sys=clock_24, ce_x1=ce_x1, ce_x2=1   out of range
+--clk_sys=clock_24, ce_x1=ce_x1, ce_x2=0   nothing at all
+--clk_sys=video_clk(12mhz), ce_x1=video_pix(6mhz), ce_x2=1  good
+scandoubler_inst :  scandoubler
+  port map (
+    clk_sys => video_clk,   
+    scanlines => "00",       --(00-none 01-25% 10-50% 11-75%)
+    ce_x1 => video_pix,     
+    ce_x2 => '1',
+    hs_in => hsync,
+    vs_in => vsync,
+    r_in => vga_r_i,
+    g_in => vga_g_i,
+    b_in => vga_b_i,
+    hs_out => vga_hs_o,
+    vs_out => vga_vs_o,
+    r_out => vga_r_o,
+    g_out => vga_g_o,
+    b_out => vga_b_o
+  );
+
+
+-- RGB
 -- adapt video to 4bits/color only and blank
-vga_r_i <= r & "000"  when blankn = '1' else "000000";
-vga_g_i <= g & "000"  when blankn = '1' else "000000";
-vga_b_i <= b & "0000" when blankn = '1' else "000000";
+vga_r_c <= r & r(2)     when blankn = '1' else "0000";
+vga_g_c <= g & g(2)     when blankn = '1' else "0000";
+vga_b_c <= b & b        when blankn = '1' else "0000";
+-- synchro composite/ synchro horizontale
+vga_hs_c <= csync;
+-- vga_hs <= csync when tv15Khz_mode = '1' else hsync;
+-- commutation rapide / synchro verticale
+vga_vs_c <= '1';
+-- vga_vs <= '1'   when tv15Khz_mode = '1' else vsync;
 
--- adapt video to 3 bits/color only
--- vga_r <= vga_r_o (5 downto 3);
--- vga_g <= vga_g_o (5 downto 3);
--- vga_b <= vga_b_o (5 downto 3);
 
--- Clock MHz for video & I2S        -- mod by somhic
-clocks2 : entity work.pll    -- check IP components in project navigator
-port map(
- inclk0 => max10_clk1_50,
- c0 => clock_vga,               
--- c1 => I2S_SCLK,
--- c2 => I2S_LRCLK,
- locked => open --pll_locked
-);
+--VIDEO OUTPUT VGA/RGB
+tv15Khz_mode <= fn_toggle(7);          -- F8 key
+process (clock_24)
+begin
+		if rising_edge(clock_24) then
+			if tv15Khz_mode = '1' then
+        --RGB
+        vga_r  <= vga_r_c;
+        vga_g  <= vga_g_c;
+        vga_b  <= vga_b_c;
+        vga_hs <= vga_hs_c;
+        vga_vs <= vga_vs_c; 
+			else
+        --VGA
+        -- adapt video to 4 bits/color only
+        vga_r  <= vga_r_o (5 downto 2);
+        vga_g  <= vga_g_o (5 downto 2);
+        vga_b  <= vga_b_o (5 downto 2);
+        vga_hs <= vga_hs_o;       
+        vga_vs <= vga_vs_o; 	    	
+			end if;
+		end if;
+end process;
+
+
+-- Clock MHz for video          -- mod by somhic
+-- clocks2 : entity work.pll    
+-- port map(
+--  inclk0 => max10_clk1_50,
+--  c0 => clock_vga,            
+--  c1 => clock_vga2,            
+--  locked => open --pll_locked
+-- );
 
 -- HDMI CONFIG    -- mod by somhic
 I2C_HDMI_Config_inst : I2C_HDMI_Config
   port map (
-    iCLK => max10_clk1_50,
-    iRST_N => reset_n,
+    iCLK     => max10_clk1_50,
+    iRST_N   => reset_n,
     I2C_SCLK => HDMI_I2C_SCL,
     I2C_SDAT => HDMI_I2C_SDA,
     HDMI_TX_INT => HDMI_TX_INT
@@ -317,86 +370,10 @@ I2C_HDMI_Config_inst : I2C_HDMI_Config
 
 --  HDMI VIDEO   -- mod by somhic
 HDMI_TX_CLK <= video_clk;    --clock_24  1024x223   12mhz 512x224@60
-HDMI_TX_DE <= blankn;
-HDMI_TX_HS <= hsync;
-HDMI_TX_VS <= vsync;
-HDMI_TX_D <= vga_r_i&"00"&vga_g_i&"00"&vga_b_i&"00";
-
---  HDMI AUDIO   -- mod by somhic
--- HDMI_MCLK <= clock_24;
--- HDMI_SCLK <= I2S_SCLK;    --  894,7 kHz  = lr*2*16
--- HDMI_LRCLK <= I2S_LRCLK;   -- 27,96 kHz
--- HDMI_I2S(0) <= tx_data;
-
--- I2S interface audio
--- sample_data <= audio_l & audio_r;  -- audio data : 16bits left channel + 16bits right channel 
--- tx_data <= sample_data_reg(audio_bit_cnt) when audio_out = '1' else '0';
- 
--- 3 timing requeriments due to this process
--- Taken from Dar Xevious sgtl5000_dac.vhd
--- process(I2S_SCLK)
--- begin
--- 	if rising_edge(I2S_SCLK) then
--- 		if I2S_LRCLK  = '1' then			--0 = Left channel, 1 = Right channel
--- 			audio_bit_cnt <= 31;
--- 			sample_data_reg <= sample_data;
--- 			audio_out <= '1';
--- 		else
--- 			if audio_bit_cnt = 0 then
--- 				audio_out <= '0';				
--- 			else
--- 				audio_bit_cnt <= audio_bit_cnt -1;
--- 			end if;
--- 		end if;
---   end if;
--- end process;
-
-
--- DECA AUDIO CODEC
-
---RESET DELAY ORIGINAL VERILOG CODE 
---WITHOUT THIS CODE AUDIO WORKS FINE, 
---BUT I LEFT IT HERE JUST IN CASE IT IS NEEDED TO BE ADDED (VHDL CONVERSION REQUIRED)
---
--- reg   [31:0]  DELAY_CNT;   
--- assign debugled = RESET_DELAY_n;
-
--- always @(negedge reset ) begin 
--- if ( reset )  begin 
---     RESET_DELAY_n <= 0;
---     DELAY_CNT   <= 0;
---   end 
--- else  begin 
---     if ( DELAY_CNT < 32'hfffff  )  
---       DELAY_CNT <= DELAY_CNT+1; 
---     else 
---       RESET_DELAY_n <= 1;
---   end
--- end
-
--- RESET_DELAY_n <= not reset;
-
--- Audio DAC DECA Output assignments
--- AUDIO_GPIO_MFP5  <= '1';  -- GPIO
--- AUDIO_SPI_SELECT <= '1';  -- SPI mode
--- AUDIO_RESET_n    <= RESET_DELAY_n;    
-
--- DECA AUDIO CODEC SPI CONFIG
--- AUDIO_SPI_CTL_RD_inst : AUDIO_SPI_CTL_RD
---   port map (
---     iRESET_n => RESET_DELAY_n,
---     iCLK_50 => max10_clk1_50,
---     oCS_n => AUDIO_SCL_SS_n,
---     oSCLK => AUDIO_SCLK_MFP3,
---     oDIN => AUDIO_SDA_MOSI,
---     iDOUT => AUDIO_MISO_MFP4
---   );
-
--- DECA AUDIO CODEC I2S DATA
--- i2sMck <= clock_24;
--- i2sSck <= I2S_SCLK;    --  894,7 kHz  = lr*2*16
--- i2sLr  <= I2S_LRCLK;   -- 27,96 kHz
--- i2sD   <= tx_data;
+HDMI_TX_DE  <= blankn;
+HDMI_TX_HS  <= hsync;
+HDMI_TX_VS  <= vsync;
+HDMI_TX_D   <= vga_r_i&vga_r_i(5 downto 4)&vga_g_i&vga_g_i(5 downto 4)&vga_b_i&vga_b_i(5 downto 4);
 
 
 -- get scancode from keyboard
@@ -436,6 +413,15 @@ port map (
   fn_pulse      => fn_pulse,
   fn_toggle     => fn_toggle
 );
+
+--Sega megadrive gamepad
+JOYX_SEL_O <= '1';  --not needed. core uses 1 button only
+
+left_i   <= not joy_BBBBFRLDU(2) and JOY1_LEFT;  -- left
+right_i  <= not joy_BBBBFRLDU(3) and JOY1_RIGHT; -- right
+up_i     <= not joy_BBBBFRLDU(0) and JOY1_UP;    -- up
+down_i   <= not joy_BBBBFRLDU(1) and JOY1_DOWN;  -- down
+fire_i   <= not joy_BBBBFRLDU(4) and JOY1_B1_P6; -- space
 
 
 --ledr(8 downto 0) <= joyBCPPFRLDU;
